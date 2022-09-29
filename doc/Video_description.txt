@@ -1,0 +1,1 @@
+This video demonstrates the WIFICAMERA project. After executing the startup script, use the mobile phone to connect to wifi, download the easyPlayer, enter the RTSP stream address, and the mobile phone will play the video captured by the camera on the CM2290 development board.
