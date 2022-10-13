@@ -97,6 +97,7 @@ DepthEstimation::DepthEstimation(std::string json_file)
             this->point_cloud_filename  = alg_obj["point_cloud_filename"].asString();
         }
     }
+    std::cout << "end of "<< __FUNCTION__ <<" constructor !!!"  << std::endl;
 }
 
 
@@ -145,6 +146,7 @@ int DepthEstimation::checkMember() {
         printf("Command-line parameter error: extrinsic and intrinsic parameters must be specified to compute the point cloud\n");
         return -1;
     } 
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     return 0;
 }
 
@@ -181,6 +183,7 @@ void DepthEstimation::undistortImg(cv::Mat &img1, cv::Mat &img2, cv::Size img_si
 
     img1 = img1r;
     img2 = img2r;
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
 }
 
 
@@ -193,6 +196,7 @@ void DepthEstimation::savePointCloude(cv::Mat &disp, cv::Mat &Q)
     disp.convertTo(floatDisp, CV_32F, 1.0f / disparity_multiplier);
     reprojectImageTo3D(floatDisp, xyz, Q, true);
     saveXYZ(point_cloud_filename.c_str(), xyz);
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
 }
 
 
@@ -205,13 +209,13 @@ cv::Mat DepthEstimation::computeDepth(cv::Mat &left_mat, cv::Mat &right_mat)
     CV_Assert(img1.empty() != true);
     CV_Assert(img2.empty() != true);
 
-    // if(alg == STEREO_BM) {
-    Mat temp1, temp2;
-    cv::cvtColor(img1, temp1, COLOR_RGB2GRAY);
-    img1 = temp1;
-    cv::cvtColor(img2, temp2, COLOR_RGB2GRAY);
-    img2 = temp2;
-    // }
+    if(alg == STEREO_BM) {
+        Mat temp1, temp2;
+        cv::cvtColor(img1, temp1, COLOR_RGB2GRAY);
+        img1 = temp1;
+        cv::cvtColor(img2, temp2, COLOR_RGB2GRAY);
+        img2 = temp2;
+    }
 
     if (scale != 1.f)
     {
@@ -310,5 +314,7 @@ cv::Mat DepthEstimation::computeDepth(cv::Mat &left_mat, cv::Mat &right_mat)
     {
         savePointCloude(disp, Q);
     }
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     return disp;
 }

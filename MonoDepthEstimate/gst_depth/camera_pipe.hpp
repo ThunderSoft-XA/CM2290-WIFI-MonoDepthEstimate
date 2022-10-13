@@ -35,6 +35,7 @@ private:
 
 public:
 	CameraPipe(std::string json_file);
+	int initPipe();
 
 	int checkElements();
 

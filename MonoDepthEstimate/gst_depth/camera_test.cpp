@@ -4,7 +4,7 @@
 
 int main(int argc, char *argv[])
 {
-	std::string json_file = "./binocular_config.json";
+	std::string json_file = "./monocular_config.json";
     // if( parse_arg(argc, argv, json_file) != 0) {
 	// 	std::cout << "invalid argument, exit !!" << std::endl;
 	// 	return -1;
@@ -16,9 +16,6 @@ int main(int argc, char *argv[])
     main_loop = g_main_loop_new (NULL, FALSE);
     
     CameraPipe camera_pipe(json_file);
-
-    /* Initialize GStreamer */
-    gst_init (&argc, &argv);
 
     camera_pipe.checkElements();
 

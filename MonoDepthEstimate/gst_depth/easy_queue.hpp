@@ -1,70 +1,141 @@
-#ifndef EASY_QUEUE_HPP
-#define EASY_QUEUE_HPP
+#ifndef Queue_HPP
+#define Queue_HPP
 
-#include <iostream>
+#include<iostream>
+#include<memory>
+#include<queue>
 #include<mutex>
 #include<condition_variable>
-#include<boost/circular_buffer.hpp>
-#include<optional>
 
-template<typename T>
-class Queue
+template <typename T>
+class Queue 
 {
 public:
-	Queue(size_t capacity) :q_{ capacity } {}
+    Queue();
+    ~Queue();
 
-	void push(T& val) // block
-	{
-		std::unique_lock<std::mutex> lk( mtx_ );
-		not_full_.wait(lk, [this] {return !q_.full(); });
-		assert(!q_.full());
-		q_.push_back(std::forward<T>(val));
-		not_empty_.notify_one();
-	}
+    T& front();
+    T pop();
+    void pop_front();
+    void push_back(const T& item);
+    void push_back(T&& item);
+    void shut_down();
 
-	bool try_push(T& val) //non-block
-	{
-		std::lock_guard<std::mutex> lk(mtx_ );
-		if (q_.full())return false;
-		q_.push_back(std::forward<T>(val));
-		not_empty_.notify_one();
-		return true;
-	}
+    // bool pop(std::unique_ptr<T>&& pData);
+    // void push(std::unique_ptr<T>&& item);
+    int size();
+    bool empty();
+    bool is_shutdown();
 
-	T pop() // block
-	{
-		std::unique_lock<std::mutex> lk( mtx_ );
-		not_empty_.wait(lk, [this] {return !q_.empty(); });
-		asert(!q_.empty());
-		T ret{ std::move_if_noexcept(q_.front()) };
-		q_.pop_front();
-		not_full_.notify_one();
-		return ret;
-
-	}
-	T try_pop() // non-block
-	{
-		std::lock_guard<std::mutex> lk(mtx_ );
-		if (q_.empty())return {};
-		T ret{ std::move_if_noexcept(q_.front()) };
-		q_.pop_front();
-		not_full_.notify_one();
-		return ret;
-	}
-
-    int size() {
-        return (int)q_.size();
+public:
+    T operator[] (int k) {
+        return m_queue[k];
     }
-
-    bool empty() {
-        return q_.empty();
+	Queue &operator= (Queue &p) {
+		this->m_queue = p.m_queue;
+        return *this;
     }
-
 private:
-	boost::circular_buffer<T>q_;
-	std::mutex mtx_;
-	std::condition_variable not_full_;
-	std::condition_variable not_empty_;
+    std::deque<T> m_queue;
+    std::mutex m_mutex;
+    std::condition_variable m_cond;
+    bool m_bShutDown = false;
 };
 
-#endif //EASY_QUEUE_HPP
+// #include"Queue.hpp"
+template <typename T>
+Queue<T>::Queue(){
+
+}
+
+template <typename T>
+Queue<T>::~Queue(){
+
+}
+
+template <typename T>
+bool Queue<T>::is_shutdown() {
+    return m_bShutDown;
+}
+
+template <typename T>
+void Queue<T>::shut_down() {
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    m_queue.clear();
+    m_bShutDown = true;
+}
+
+template <typename T>
+T Queue<T>::pop()
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    // if (m_queue.empty()) {
+    //     return false;
+    // }
+
+    m_cond.wait(mlock, [this](){return !this->m_queue.empty();});
+    T rc(std::move(m_queue.front()));
+    m_queue.pop_front();
+
+    return rc;
+}
+
+template <typename T>
+T& Queue<T>::front()
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    while(m_queue.empty()) {
+        m_cond.wait(mlock);
+    }    
+
+    return m_queue.front();
+}
+
+template <typename T>
+void Queue<T>::pop_front()
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    while(m_queue.empty()) {
+        m_cond.wait(mlock);
+    }
+
+    m_queue.pop_front();
+}
+
+template <typename T>
+void Queue<T>::push_back(const T& item)
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    m_queue.push_back(item);
+    mlock.unlock();
+    m_cond.notify_one();
+}
+
+template <typename T>
+void Queue<T>::push_back(T&& item)
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    m_queue.push_back(std::move(item));
+    mlock.unlock();
+    m_cond.notify_one();  
+}
+
+template <typename T>
+int Queue<T>::size()
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    int size = m_queue.size();
+    mlock.unlock();
+    return size;
+}
+
+template <typename T>
+bool Queue<T>::empty()
+{
+    std::unique_lock<std::mutex> mlock(m_mutex);
+    bool is_empty = m_queue.empty();
+    mlock.unlock();
+    return is_empty;
+}
+
+#endif

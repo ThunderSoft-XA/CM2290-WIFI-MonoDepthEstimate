@@ -6,7 +6,7 @@
  * and is removed when appsrc has enough data (enough-data signal).
  */
 
-Queue<cv::Mat> rgb_mat_queue{10};
+Queue<cv::Mat> rgb_mat_queue;
 
 /* The appsink has received a buffer */
 static GstFlowReturn new_sample (GstElement *app_sink, gpointer data) 
@@ -60,7 +60,7 @@ static GstFlowReturn new_sample (GstElement *app_sink, gpointer data)
             cv::cvtColor(yuvNV12, rgb24, cv::COLOR_YUV2RGB_NV12);
 #endif
             cv::Mat sink_mat(cv::Size(width, height), CV_8UC3, map.data);
-            rgb_mat_queue.try_push(sink_mat);
+            rgb_mat_queue.push_back(sink_mat);
             cv::imwrite("rgb24.png",sink_mat);
 
             gst_buffer_unmap (sample_buffer, &map);	//解除映射
@@ -123,9 +123,14 @@ CameraPipe::CameraPipe(std::string json_file)
             }
         }
     }
+    std::cout << "camera info : pipe_name =  " << this->pipe_name << ", camera_id = " << this->camera_id << std::endl;
     ifs.close();
     this->b = 1; /* For waveform generation */
     this->d = 1;
+
+    std::cout << "end of "<< __FUNCTION__ <<" constructor !!!"  << std::endl;
+
+}
 
 /*** NV12
  * gst-launch-1.0 -e qtiqmmfsrc camera=0 name=qmmf ! video/x-raw\(memory:GB
@@ -140,7 +145,15 @@ interval=1 ! qtivdec ! videoconvert ! video/x-raw,format=RGB ! appsink drop=true
  max-buffers=1 sync=false max-lateness=0
  * 
  */
+
+int CameraPipe::initPipe()
+{
     /* Create the elements */
+    if( this->pipe_name.empty() ) {
+        std::cout << "doing "<< __FUNCTION__ <<" failed in "<< __FILE__ << "!!!"  << std::endl;
+        return -1;
+    }
+
     this->qtiqmmf = gst_element_factory_make ("qtiqmmfsrc", "qmmf");
     this->qmmf_caps = gst_element_factory_make ("capsfilter", "qmmf_caps");
     this->qtic2venc = gst_element_factory_make ("qtic2venc", "c2venc");
@@ -152,7 +165,11 @@ interval=1 ! qtivdec ! videoconvert ! video/x-raw,format=RGB ! appsink drop=true
 
     /* Create the empty camera pipeline */
     this->pipeline = gst_pipeline_new (this->pipe_name.c_str());
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
+
+    return 0;
 }
+
 
 int CameraPipe::checkElements() 
 {
@@ -192,7 +209,7 @@ int CameraPipe::checkElements()
         std::cout << "element " <<  gst_object_get_name(GST_OBJECT(this->app_sink)) << "could be created." << std::endl;
         return -1;
     }
-
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     return 0;
 }
 
@@ -220,6 +237,8 @@ void CameraPipe::setProperty()
     g_object_set(this->app_sink, "max-lateness",0,NULL);
     g_object_set(this->app_sink, "max-buffers",1,NULL);
     g_object_set(this->app_sink, "drop",TRUE,NULL);
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
 }
 
 int CameraPipe::runPipeline() {
@@ -243,6 +262,7 @@ int CameraPipe::runPipeline() {
     g_signal_connect (G_OBJECT (bus), "message::error", (GCallback)error_cb, this);
     gst_object_unref (bus);
 
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     /* Start playing the pipeline */
     return gst_element_set_state (this->pipeline, GST_STATE_PLAYING);
         

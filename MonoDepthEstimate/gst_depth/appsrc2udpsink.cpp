@@ -2,19 +2,23 @@
 
 static int caps_width;
 static int caps_height;
+static cv::Mat default_mat;
 
 static void cb_need_data(GstAppSrc *appsrc, guint unused_size, gpointer user_data)
 {
 	g_print("In %s\n", __func__);
 	static GstClockTime timestamp = 0;
+    APPSrc2UdpSink *pipe = static_cast<APPSrc2UdpSink *>(user_data);
 	GstBuffer *buffer;
 	guint size;
 	GstFlowReturn ret;
 	GstMapInfo map;
 
 	size = caps_width * caps_height * 3;
+    std::cout << "check fact caps size : " << size << std::endl;
 
 	buffer = gst_buffer_new_allocate (NULL, size, NULL);
+    static gboolean white = FALSE;
 
 	/* this makes the image black/white */
 	// gst_buffer_memset (buffer, 0, white ? 0xff : 0x0, size);
@@ -30,24 +34,50 @@ static void cb_need_data(GstAppSrc *appsrc, guint unused_size, gpointer user_dat
 	g_print("map.data address = %p\n",map.data);
 	g_print("user_data address = %p\n",user_data);
 	g_print("size = %d\n", size);//gst_buffer_get_size(buffer)
-    memcpy( (guchar *)map.data, (guchar *)user_data, size );
+    cv::Mat mat_data;
+    if(pipe->push_mat_queue.empty()) {
+        g_print("push_mat_queue is empty,so using default mat\n");
+         /* this makes the image black/white */
+        if(default_mat.empty()) {
+            gst_buffer_memset (buffer, 0, white ? 0xFF : 0x00, size);
+        } else {
+            mat_data = default_mat;
+            memcpy( (guchar *)map.data, (guchar *)mat_data.data, size);
+        }
+    } else {
+        mat_data = pipe->push_mat_queue.pop();
+        if (mat_data.empty()) {
+            g_print("mat from push_mat_queue is empty ,so using default mat\n");
+            if(default_mat.empty()) {
+                gst_buffer_memset(buffer, 0, white ? 0xFF : 0x00, size);
+            } else {
+                mat_data = default_mat;
+                memcpy( (guchar *)map.data, (guchar *)mat_data.data, size);
+            }
+        } else {
+            mat_data.copyTo(default_mat);
+            memcpy( (guchar *)map.data, (guchar *)mat_data.data, size);
+        }
+    }
 
-	gst_buffer_unmap (buffer, &map);	//解除映射
 #endif
-
+    //set time stamp
 	GST_BUFFER_PTS (buffer) = timestamp;
-	GST_BUFFER_DURATION (buffer) = gst_util_uint64_scale_int (1, GST_SECOND, 2);
-
+	GST_BUFFER_DURATION (buffer) = gst_util_uint64_scale_int (1, GST_SECOND, 25);
 	timestamp += GST_BUFFER_DURATION (buffer);
 
 	g_signal_emit_by_name (appsrc, "push-buffer", buffer, &ret);
-	// ret = gst_app_src_push_buffer(appsrc, buffer);
+    //ret = gst_app_src_push_buffer(appsrc, buffer);
+
+    gst_buffer_unmap (buffer, &map);	//解除映射
+
 	gst_buffer_unref (buffer);	//释放资源
 
 	if (ret != GST_FLOW_OK) {
 		/* something wrong, stop pushing */
-		// g_main_loop_quit (loop);
+		// g_main_loop_quit (pipe->loop);
 	}
+    std::cout << "free end, over " << std::endl;
 }
 
 static void cb_enough_data(GstAppSrc *src, gpointer user_data)
@@ -92,6 +122,24 @@ static gboolean cb_bus (GstBus *bus, GstMessage *message, gpointer data)
 	return TRUE;
 }
 
+/* This signal callback triggers when appsrc needs data. Here, we add an idle handler
+ * to the mainloop to start pushing data into the appsrc */
+static void start_feed (GstElement *source, guint size, APPSrc2UdpSink *data) {
+  if (data->sourceid == 0) {
+    g_print ("Start feeding\n");
+    data->sourceid = g_idle_add ((GSourceFunc) cb_need_data, data);
+  }
+}
+
+/* This callback triggers when appsrc has enough data and we can stop sending.
+ * We remove the idle handler from the mainloop */
+static void stop_feed (GstElement *source, APPSrc2UdpSink *data) {
+  if (data->sourceid != 0) {
+    g_print ("Stop feeding\n");
+    g_source_remove (data->sourceid);
+    data->sourceid = 0;
+  }
+}
 
 APPSrc2UdpSink::APPSrc2UdpSink(std::string json_file) 
 {
@@ -119,10 +167,10 @@ APPSrc2UdpSink::APPSrc2UdpSink(std::string json_file)
                 this->pipe_name = streams_obj[streams_index]["pipe_name"].asString();
             }
             if (streams_obj[streams_index].isMember("width")) {
-                this->width = streams_obj[streams_index]["width"].asInt();
+                caps_width = this->width = streams_obj[streams_index]["width"].asInt();
             }
             if (streams_obj[streams_index].isMember("height")) {
-                this->height = streams_obj[streams_index]["height"].asInt();
+                caps_height = this->height = streams_obj[streams_index]["height"].asInt();
             }
             if (streams_obj[streams_index].isMember("host")) {
                 this->host = streams_obj[streams_index]["host"].asString();
@@ -132,9 +180,13 @@ APPSrc2UdpSink::APPSrc2UdpSink(std::string json_file)
             }
         }
     }
+    this->sourceid = 0;
 
-    std::cout << "json configure info : " << this->pipe_name << \
+    std::cout << "json configure info : " << this->pipe_name << " : " <<\
         this->width << " x " << this->height << ", IP : port = " << this->host << ":" << this->port << std::endl;
+
+    std::cout << "end of "<< __FUNCTION__ <<" constructor !!!"  << std::endl;
+}
 
 /**
  * @brief 
@@ -152,13 +204,32 @@ APPSrc2UdpSink::APPSrc2UdpSink(std::string json_file)
  *  mpegtsmux ! udpsink host=localhost port=9999
  *  https://qa.1r1g.com/sf/ask/2613742911/
  */
+
+/**
+ * @brief appsrc ! videoconvert ! x264enc noise-reduction=10000 tune=zerolatency 
+ *  byte-stream=true threads=4 ! mpegtsmux ! udpsink host=localhost port=9999
+ * 
+ */
+
+int APPSrc2UdpSink::initPipe()
+{
+    if( this->pipe_name.empty() ) {
+        std::cout << "doing "<< __FUNCTION__ <<" failed in "<< __FILE__ << "!!!"  << std::endl;
+        return -1;
+    }
     pipeline = gst_pipeline_new (this->pipe_name.c_str());
     appsrc = gst_element_factory_make ("appsrc", "source");
 	videoconvert = gst_element_factory_make("videoconvert", "convert");
-	qtic2venc = gst_element_factory_make("qtic2venc", "c2venc"); //qtic2venc
+	convert_caps = gst_element_factory_make("capsfilter", "convert_caps");
+	qtic2venc = gst_element_factory_make("x264enc", "c2venc"); //qtic2venc x264enc
     h264parse = gst_element_factory_make("h264parse", "parser");
-	rtph264pay = gst_element_factory_make("capsfilter", "payloader");
+	// caps = gst_element_factory_make("capsfilter", "caps");
+	mpegtsmux = gst_element_factory_make("mpegtsmux", "mpegts");
+    // rtph264pay = gst_element_factory_make("rtph264pay", "payloader");
 	udpsink = gst_element_factory_make("udpsink", "sink");
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
+    return 0;
 }
 
 
@@ -175,6 +246,10 @@ int APPSrc2UdpSink::checkElements()
     if (!this->videoconvert) {
         std::cout << "element videoconvert could be created." << std::endl;
         return -1;
+    }     
+    if (!this->convert_caps) {
+        std::cout << "element videoconvert capsfilter could be created." << std::endl;
+        return -1;
     }    
     if (!this->qtic2venc) {
         std::cout << "element qtic2venc could be created." << std::endl;
@@ -184,14 +259,20 @@ int APPSrc2UdpSink::checkElements()
         std::cout << "element h264parse could be created." << std::endl;
         return -1;
     }    
-    if (!this->rtph264pay) {
+    if (!this->mpegtsmux) {
         std::cout << "element mpegtsmux could be created." << std::endl;
         return -1;
     }    
+    // if (!this->rtph264pay) {
+    //     std::cout << "element udpsink could be created." << std::endl;
+    //     return -1;
+    // }
     if (!this->udpsink) {
         std::cout << "element udpsink could be created." << std::endl;
         return -1;
     }
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     return 0;
 }
 
@@ -200,65 +281,75 @@ void APPSrc2UdpSink::setProperty()
     /* setup */
     g_object_set (G_OBJECT (appsrc), "caps",
         gst_caps_new_simple ("video/x-raw",
-            "format", G_TYPE_STRING, "RGB",
+            "format", G_TYPE_STRING, "BGR",
             "width", G_TYPE_INT, this->width,
             "height", G_TYPE_INT, this->height,
             "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
-            "framerate", GST_TYPE_FRACTION, 30, 1,
+            "framerate", GST_TYPE_FRACTION, 25, 1,
             NULL),
         NULL);
     g_object_set (G_OBJECT (appsrc),
         "stream-type", 0,
         "is-live", TRUE,
+        "do-timestamp", TRUE,
+        "min-latency", 0,
         "format", GST_FORMAT_TIME, NULL);
 
-    g_object_set(this->h264parse, "config-interval", -1, NULL);
-    g_object_set(G_OBJECT(rtph264pay), "caps", 
-        gst_caps_new_simple("video/x-h264",
-            "stream-format", G_TYPE_STRING, "byte-stream",
-            NULL), 
-        NULL);
+    GstCaps *convert_caps_str = gst_caps_from_string("video/x-raw, format=NV12, width=320, height=240, framerate=25/1");
+    g_object_set(G_OBJECT(this->convert_caps), "caps", convert_caps_str, NULL);
+    gst_caps_unref(convert_caps_str);
+
+    g_object_set(this->h264parse, "config-interval", 1, NULL);
 
 
 	g_object_set(this->udpsink, "host", this->host.c_str(), NULL);
 	g_object_set(this->udpsink, "port",  this->port, NULL);
-	g_object_set(this->udpsink, "sync", false, NULL);
-	g_object_set(this->udpsink, "async", false, NULL);
+	// g_object_set(this->udpsink, "sync", false, NULL);
+	// g_object_set(this->udpsink, "async", false, NULL);
 
     this->cbs.need_data = cb_need_data;
     this->cbs.enough_data = cb_enough_data;
     this->cbs.seek_data = cb_seek_data;
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
 }
 
-
-int APPSrc2UdpSink::runPipe(cv::Mat &depth_estimation_mat)
+void APPSrc2UdpSink::updateCaps(int width, int height)
 {
-    assert(depth_estimation_mat.empty() != true);
-    if( (depth_estimation_mat.cols != this->width) || (depth_estimation_mat.rows != this->height)) {
+    if( (width != this->width) || (height != this->height)) {
         /* update caps */
-        caps_width = this->width = depth_estimation_mat.cols;
-        caps_height = this->height = depth_estimation_mat.rows;
+        std::cout << "caps size different, updating ......" << std::endl;
+        caps_width = this->width = width;
+        caps_height = this->height = height;
         g_object_set (G_OBJECT (appsrc), "caps",
         gst_caps_new_simple ("video/x-raw",
-            "format", G_TYPE_STRING, "RGB",
+            "format", G_TYPE_STRING, "BGR",
             "width", G_TYPE_INT, this->width,
             "height", G_TYPE_INT, this->height,
             "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
-            "framerate", GST_TYPE_FRACTION, 30, 1,
+            "framerate", GST_TYPE_FRACTION, 25, 1,
             NULL), NULL);
     }
+
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
+}
+
+int APPSrc2UdpSink::runPipe()
+{
     /* TEST WITH udpsink */
     /* NOT WORKING AS EXPECTED, DISPLAYING A BLURRY VIDEO */
     gst_bin_add_many (GST_BIN (this->pipeline), this->appsrc, this->videoconvert, 
-        this->qtic2venc, this->h264parse, this->rtph264pay, this->udpsink, NULL);
+        this->qtic2venc, this->h264parse, /**this->caps, */this->mpegtsmux, /**this->rtph264pay,**/ this->udpsink, NULL);
 
     if (gst_element_link_many ( this->appsrc, this->videoconvert, 
-        this->qtic2venc, this->h264parse, this->rtph264pay, this->udpsink, NULL)!= TRUE) {
+        this->qtic2venc, this->h264parse, /**this->caps, **/this->mpegtsmux, /**this->rtph264pay,**/ this->udpsink, NULL)!= TRUE) {
             g_printerr ("Elements could not be linked.\n");
             gst_object_unref (pipeline);
             return -1;
     }
-    gst_app_src_set_callbacks(GST_APP_SRC_CAST(appsrc), &cbs, depth_estimation_mat.data, NULL);
+    // gst_app_src_set_callbacks(GST_APP_SRC_CAST(appsrc), &cbs, depth_estimation_mat.data, NULL);
+    g_signal_connect (this->appsrc, "need-data", G_CALLBACK (cb_need_data), this);
+    g_signal_connect (this->appsrc, "enough-data", G_CALLBACK (stop_feed), this);
 
     bus = gst_element_get_bus(pipeline);
     gst_bus_add_signal_watch (bus);
@@ -267,57 +358,9 @@ int APPSrc2UdpSink::runPipe(cv::Mat &depth_estimation_mat)
 
     /* play */
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    std::cout << "doing "<< __FUNCTION__ <<" successfully in "<< __FILE__ << "!!!"  << std::endl;
     return 0;
 }
-
-bool APPSrc2UdpSink::pushMatData(cv::Mat &mat_data)
-{
-	g_print("In %s\n", __func__);
-	static GstClockTime timestamp = 0;
-	GstBuffer *buffer;
-	guint size;
-	GstFlowReturn ret;
-	GstMapInfo map;
-
-	size = this->width * this->height * 3;
-
-	buffer = gst_buffer_new_allocate (NULL, size, NULL);
-
-	/* this makes the image black/white */
-	// gst_buffer_memset (buffer, 0, white ? 0xff : 0x0, size);
-	// gst_buffer_memset (buffer, 0, *data, size);
-
-//这两个方法都可以
-#if 0
-	g_print("In %s: %i\n", __FILE__,__LINE__);
-    gst_buffer_fill(buffer, 0, &user_data, size);
-#else
-    gst_buffer_map (buffer, &map, GST_MAP_WRITE);
-
-	g_print("size = %d\n", size);//gst_buffer_get_size(buffer)
-    memcpy( (guchar *)map.data, (guchar *)mat_data.data, size );
-
-	gst_buffer_unmap (buffer, &map);	//解除映射
-#endif
-
-	GST_BUFFER_PTS (buffer) = timestamp;
-	GST_BUFFER_DURATION (buffer) = gst_util_uint64_scale_int (1, GST_SECOND, 2);
-
-	timestamp += GST_BUFFER_DURATION (buffer);
-
-	g_signal_emit_by_name (appsrc, "push-buffer", buffer, &ret);
-	// ret = gst_app_src_push_buffer(appsrc, buffer);
-	gst_buffer_unref (buffer);	//释放资源
-
-	if (ret != GST_FLOW_OK) {
-		/* something wrong, stop pushing */
-		// g_main_loop_quit (loop);
-	}
-
-    return true;
-
-}
-
 
 APPSrc2UdpSink::~APPSrc2UdpSink()
 {
